@@ -93,11 +93,13 @@ class Base extends Extendable
                 $this->extendIndex();
             }
 
+            // dd($this->data);
             /**
              * Extend collection results
              */
             $this->fireSystemEvent(Plugin::EVENT_API_EXTEND_INDEX, [&$this->collection], false);
 
+            // $obModelCollection = $this->collection;
             $obModelCollection = $this->collection->paginate($this->itemsPerPage);
             return $this->getIndexResource()
                 ? app($this->getIndexResource(), [$obModelCollection])
@@ -142,9 +144,11 @@ class Base extends Extendable
             /**
              * Fire event before show item
              */
-            $this->fireSystemEvent(Plugin::EVENT_API_BEFORE_SHOW_COLLECT, [&$value], false);
+            $this->fireSystemEvent(Plugin::EVENT_API_BEFORE_SHOW_COLLECT, [$value], false);
 
-            $iModelId = $this->getItemId($value);
+            /** @var int|null $iModelId */
+            $iModelId = app($this->getModelClass())->where($this->getPrimaryKey(), $value)->value('id');
+
             if (!$iModelId) {
                 throw new Exception(static::ALERT_RECORD_NOT_FOUND, 403);
             }
@@ -529,20 +533,6 @@ class Base extends Extendable
     }
 
     /**
-     * Check if api request get from backend or frontend
-     * @return bool
-     */
-    protected function isBackend(): bool
-    {
-        try {
-            $this->currentUser();
-            return request()->header('X-ENV') == 'backend';
-        } catch (Exception $ex) {
-            return false;
-        }
-    }
-
-    /**
      * @return array
      *  [
      *      'sort' => [
@@ -595,13 +585,6 @@ class Base extends Extendable
             }
         }
 
-        if ($sFilter = array_get($filters, "sort")) {
-            if (is_string($sFilter)) {
-                $sort['column'] = $sFilter;
-            }
-            array_forget($filters, "sort");
-        }
-
         return compact('sort', 'filters');
     }
 
@@ -619,6 +602,24 @@ class Base extends Extendable
         $arSort = array_get($data, 'sort');
         $obCollection = $this->collection;
 
+        if (!empty($arFilters)) {
+            if ($obCollection->methodExists('filter')) {
+                $obCollection = $obCollection->filter($arFilters);
+            }
+            foreach ($arFilters as $sFilterName => $sFilterValue) {
+                if ($sFilterName == 'page') {
+                    continue;
+                }
+                $sMethodName = camel_case($sFilterName);
+                if ($obCollection->methodExists($sMethodName)) {
+                    $obCollection = call_user_func_array(
+                        [$obCollection, $sMethodName],
+                        array_wrap($sFilterValue)
+                    );
+                }
+            }
+        }
+
         if ($obCollection->methodExists('sort') && $arSort['column']) {
             $sSort = $arSort['column'];
 //            if ($sSort != 'no' && !str_contains($sSort, '|')) {
@@ -627,51 +628,16 @@ class Base extends Extendable
             $obCollection = $obCollection->sort($sSort);
         }
 
-        if (!empty($arFilters)) {
-            if ($obCollection->methodExists('filter')) {
-                $obCollection = $obCollection->filter($arFilters);
-            }
-
-
-            foreach ($arFilters as $sFilterName => $sFilterValue) {
-                if ($sFilterName == 'page') {
-                    continue;
-                }
-
-                $sMethodName = camel_case($sFilterName);
-                if ($obCollection->methodExists($sMethodName)) {
-                    $obResult = call_user_func_array(
-                        [$obCollection, $sMethodName],
-                        [$sFilterValue]
-                    );
-
-                    if (is_array($obResult)) {
-                        $obCollection->intersect(array_keys($obResult));
-                    } else {
-                        $obCollection = $obResult;
-                    }
-                }
-            }
+        if(!empty($this->data['per_page'])){
+            $this->itemsPerPage = $this->data['per_page'];
         }
 
         return $obCollection;
     }
 
-    /**
-     * @param string|int $sValue
-     *
-     * @return mixed
-     */
-    protected function getItemId($sValue)
-    {
-        return ($this->getPrimaryKey() == 'id')
-            ? $sValue
-            : app($this->getModelClass())->where($this->getPrimaryKey(), $sValue)->value('id');
-    }
-
     protected function getItem(int $iModelID)
     {
-        /** @var \Lovata\Toolbox\Classes\Item\ElementItem $sItemClass */
+        /** @var \Lovata\Toolbox\Classes\Collection\ElementCollection $sItemClass */
         $sItemClass = $this->collection::ITEM_CLASS;
         return $sItemClass::make($iModelID);
     }
